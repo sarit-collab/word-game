@@ -59,3 +59,21 @@ button.w { color: var(--ink); font-weight: 400; padding: 6px 12px; }
 .p1 { background: #f2b705; height: 180px; } .p2 { background: #9aa4b1; height: 140px; } .p3 { background: #c97a3d; height: 110px; }
 .player-detail { margin-top: 14px; }
 .player-detail h3 { margin: 12px 0 8px; font-size: 16px; }
+.tscroll { overflow-x: auto; }
+.tag { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--chip); color: var(--muted); }
+.tag.ok { background: #e3f6ea; color: #13703f; }
+.tag.warn { background: #fff4d6; color: #8a6200; }
+.tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; align-items: center; }
+.pill { font-size: 12px; font-weight: 800; padding: 2px 10px; border-radius: 999px; color: #fff; }
+.p-ok { background: var(--good); } .p-no { background: var(--bad); }
+.ballot { display: grid; gap: 8px; }
+.vrow { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 12px; border-radius: 12px; border: 2px solid var(--line); background: #fff; }
+.vrow.fail { background: #fff5f5; border-color: #f3c9c9; }
+.vmain { min-width: 0; flex: 1; }
+.vword { font-size: 18px; word-break: break-word; }
+.vbtns { display: flex; gap: 6px; }
+.vb { background: var(--chip); color: var(--ink); padding: 8px 12px; font-size: 14px; border: 2px solid transparent; }
+.vb.on-yes { background: #e3f6ea; border-color: var(--good); }
+.vb.on-no { background: #fde8e8; border-color: var(--bad); }
+button.sm { padding: 6px 10px; font-size: 13px; }
+.dictw { font-size: 11px; color: #8a6200; margin-left: 4px; }
