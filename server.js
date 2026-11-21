@@ -27,6 +27,39 @@ function newCode() {
 }
 const id = () => crypto.randomBytes(8).toString('hex');
 
+// ---------- พจนานุกรม (โหลดเข้าหน่วยความจำตอนเปิดเซิร์ฟเวอร์) ----------
+// ไทย: PyThaiNLP words_th (Apache-2.0) · อังกฤษ: dwyl/english-words (Unlicense)
+const DICT_SOURCES = {
+  th: 'https://raw.githubusercontent.com/PyThaiNLP/pythainlp/dev/pythainlp/corpus/words_th.txt',
+  en: 'https://raw.githubusercontent.com/dwyl/english-words/master/words_alpha.txt',
+};
+const DICT = { th: null, en: null };
+async function loadDict(lang) {
+  try {
+    const r = await fetch(DICT_SOURCES[lang]);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const set = new Set();
+    for (const line of (await r.text()).split(/\r?\n/)) {
+      const w = normalize(line);
+      if (w) set.add(w);
+    }
+    DICT[lang] = set;
+    console.log(`  โหลดพจนานุกรม ${lang} แล้ว: ${set.size.toLocaleString()} คำ`);
+  } catch (e) {
+    console.log(`  โหลดพจนานุกรม ${lang} ไม่สำเร็จ (${e.message}) จะลองใหม่ใน 1 นาที`);
+    setTimeout(() => loadDict(lang), 60000).unref();
+  }
+}
+// true = มีในพจนานุกรม, false = ไม่มี, null = ยังตรวจไม่ได้ (พจนานุกรมยังไม่พร้อม)
+function inDict(w) {
+  const isThai = /[฀-๿]/.test(w);
+  const set = isThai ? DICT.th : DICT.en;
+  if (!set) return null;
+  if (set.has(w)) return true;
+  if (!isThai && w.includes(' ')) return w.split(' ').every(x => set.has(x)); // วลีอังกฤษหลายคำ
+  return false;
+}
+
 // ---------- กติกาการตรวจคำ ----------
 const LEADING_VOWELS = /^[เแโใไ]+/; // สระหน้าในภาษาไทย เช่น "เกม" ขึ้นต้นด้วย ก
 function normalize(w) {
@@ -39,29 +72,68 @@ function startsWithLetter(word, letter) {
   return word.replace(LEADING_VOWELS, '').startsWith(L);
 }
 
-function computeResults(room) {
-  // นับว่าแต่ละคำมีกี่คนตอบ (ไม่นับคำที่ host ตัดทิ้ง)
-  const count = new Map();
+// สรุปทุกคำในรอบ: ใครพิมพ์, มีในพจนานุกรมไหม, ผลโหวต, ผ่านหรือไม่
+// - ผู้เล่นโหวตได้เฉพาะคำที่ตัวเองไม่ได้พิมพ์
+// - ถ้ายังไม่โหวต: คำที่มีในพจนานุกรม = นับเป็น "ผ่าน", คำที่ไม่มี = นับเป็น "ไม่ผ่าน"
+// - ผ่านเมื่อเสียงผ่านเกินครึ่ง (เสมอ: ผ่านเฉพาะคำที่มีในพจนานุกรม)
+// - host บังคับผ่าน/ไม่ผ่านได้
+function tallyWords(room) {
+  const byWord = new Map();
   for (const p of room.players.values()) {
-    for (const w of p.words) if (!room.rejected.has(w)) count.set(w, (count.get(w) || 0) + 1);
+    for (const w of p.words) {
+      if (!byWord.has(w)) byWord.set(w, { word: w, authors: new Set(), dict: inDict(w) });
+      byWord.get(w).authors.add(p.id);
+    }
   }
+  for (const t of byWord.values()) {
+    const votes = room.votes.get(t.word) || new Map();
+    const defaultYes = t.dict !== false;
+    let yes = 0, no = 0;
+    for (const p of room.players.values()) {
+      if (t.authors.has(p.id)) continue;
+      const v = votes.has(p.id) ? votes.get(p.id) : defaultYes;
+      v ? yes++ : no++;
+    }
+    t.yes = yes; t.no = no; t.voters = yes + no;
+    t.override = room.override.get(t.word) || null;
+    if (t.override) t.pass = t.override === 'ok';
+    else if (t.voters === 0) t.pass = defaultYes;
+    else t.pass = yes * 2 > t.voters || (yes * 2 === t.voters && defaultYes);
+    t.reason = t.pass ? null : t.override ? 'host' : t.dict === false && no === t.voters ? 'dict' : 'vote';
+  }
+  return byWord;
+}
+
+function computeResults(room) {
+  const tally = tallyWords(room);
   const players = [...room.players.values()].map(p => {
-    let score = 0, unique = 0, shared = 0;
+    let score = 0, unique = 0, shared = 0, failed = 0;
     const words = p.words.map(w => {
-      const rejected = room.rejected.has(w);
-      const n = count.get(w) || 0;
-      const pts = rejected ? 0 : n === 1 ? 2 : 1;
+      const t = tally.get(w);
+      const pts = !t.pass ? 0 : t.authors.size === 1 ? 2 : 1;
       score += pts;
-      if (!rejected) (n === 1 ? unique++ : shared++);
-      return { word: w, pts, rejected, sharedWith: rejected ? 0 : n };
+      if (!t.pass) failed++; else if (t.authors.size === 1) unique++; else shared++;
+      return { word: w, pts, rejected: !t.pass, reason: t.reason, sharedWith: t.authors.size, dict: t.dict };
     });
-    return { id: p.id, name: p.name, score, unique, shared, total: p.words.length, words };
+    return { id: p.id, name: p.name, score, unique, shared, failed, total: p.words.length, words };
   }).sort((a, b) => b.score - a.score || b.unique - a.unique || a.name.localeCompare(b.name, 'th'));
   let rank = 0, prev = null;
   players.forEach((p, i) => { if (p.score !== prev) { rank = i + 1; prev = p.score; } p.rank = rank; });
-  const allWords = [...count.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'th'))
-    .map(([word, n]) => ({ word, n }));
-  return { players, allWords, rejected: [...room.rejected] };
+  return { players };
+}
+
+// บัตรโหวต: รายการคำทั้งหมด (ไม่บอกว่าใครพิมพ์)
+function ballot(room, forPid) {
+  const tally = tallyWords(room);
+  return [...tally.values()]
+    // คำที่ไม่พบในพจนานุกรมขึ้นก่อน เพราะต้องโหวตมากที่สุด
+    .sort((a, b) => (b.dict === false) - (a.dict === false) || a.word.localeCompare(b.word, 'th'))
+    .map(t => {
+      const votes = room.votes.get(t.word);
+      const mine = forPid ? t.authors.has(forPid) : false;
+      const myVote = forPid && !mine ? (votes && votes.has(forPid) ? votes.get(forPid) : t.dict !== false) : null;
+      return { word: t.word, dict: t.dict, mine, myVote, yes: t.yes, no: t.no, voters: t.voters, pass: t.pass, override: t.override, n: t.authors.size };
+    });
 }
 
 // ---------- สถานะห้องที่ส่งให้แต่ละฝั่ง ----------
@@ -69,12 +141,14 @@ function publicState(room, forPid, isHost) {
   const base = {
     code: room.code, category: room.category, letter: room.letter, duration: room.duration,
     phase: room.phase, endsAt: room.endsAt, now: Date.now(),
+    dictReady: !!(DICT.th && DICT.en),
     players: [...room.players.values()].map(p => ({ id: p.id, name: p.name, count: p.words.length, online: p.clients.size > 0 })),
   };
-  if (room.phase === 'review' && isHost) base.results = computeResults(room);
+  if (room.phase === 'vote') base.ballot = ballot(room, forPid);
   if (room.phase === 'done') base.results = computeResults(room);
-  if (room.phase === 'review' && !isHost) base.reviewing = true;
-  if (forPid && room.players.has(forPid)) base.me = { id: forPid, words: room.players.get(forPid).words };
+  if (forPid && room.players.has(forPid)) {
+    base.me = { id: forPid, words: room.players.get(forPid).words.map(w => ({ word: w, dict: inDict(w) })) };
+  }
   return base;
 }
 
@@ -87,7 +161,7 @@ function send(res, data) { try { res.write(`data: ${JSON.stringify(data)}\n\n`);
 function endRound(room) {
   if (room.phase !== 'playing') return;
   clearTimeout(room.timer);
-  room.phase = 'review';
+  room.phase = 'vote';
   room.endsAt = null;
   broadcast(room);
 }
@@ -110,7 +184,7 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   const p = url.pathname;
 
-  if (p === '/api/info') return json(res, 200, { ips: lanIPs(), port: PORT });
+  if (p === '/api/info') return json(res, 200, { ips: lanIPs(), port: PORT, dict: { th: DICT.th?.size || 0, en: DICT.en?.size || 0 } });
   if (p === '/api/exists') {
     const r = rooms.get(url.searchParams.get('room'));
     const pid = url.searchParams.get('pid');
@@ -151,7 +225,7 @@ const server = http.createServer(async (req, res) => {
         category: String(b.category || 'ทั่วไป').slice(0, 60),
         letter: String(b.letter || '').trim().slice(0, 3),
         duration: Math.min(600, Math.max(15, Number(b.duration) || 60)),
-        players: new Map(), hostClients: new Set(), rejected: new Set(), lastActive: Date.now(),
+        players: new Map(), hostClients: new Set(), votes: new Map(), override: new Map(), lastActive: Date.now(),
       };
       rooms.set(code, r);
       return json(res, 200, { room: code, hostKey: r.hostKey });
@@ -183,13 +257,27 @@ const server = http.createServer(async (req, res) => {
       if (pl.words.includes(w)) return json(res, 400, { error: 'คุณพิมพ์คำนี้ไปแล้ว' });
       pl.words.push(w);
       broadcast(room);
-      return json(res, 200, { ok: true });
+      return json(res, 200, { ok: true, dict: inDict(w) });
     }
 
     if (p === '/api/unword') {
       const pl = room.players.get(b.pid);
       if (!pl || room.phase !== 'playing') return json(res, 400, { error: 'ลบไม่ได้' });
       pl.words = pl.words.filter(x => x !== b.word);
+      broadcast(room);
+      return json(res, 200, { ok: true });
+    }
+
+    if (p === '/api/vote') {
+      const pl = room.players.get(b.pid);
+      if (!pl) return json(res, 403, { error: 'ไม่พบผู้เล่น' });
+      if (room.phase !== 'vote') return json(res, 400, { error: 'หมดเวลาโหวตแล้ว' });
+      const w = normalize(b.word);
+      const exists = [...room.players.values()].some(x => x.words.includes(w));
+      if (!exists) return json(res, 400, { error: 'ไม่พบคำนี้' });
+      if (pl.words.includes(w)) return json(res, 400, { error: 'โหวตคำของตัวเองไม่ได้' });
+      if (!room.votes.has(w)) room.votes.set(w, new Map());
+      room.votes.get(w).set(pl.id, !!b.ok);
       broadcast(room);
       return json(res, 200, { ok: true });
     }
@@ -206,7 +294,8 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/start') {
       if (room.players.size < 1) return json(res, 400, { error: 'ยังไม่มีผู้เล่น' });
       for (const pl of room.players.values()) pl.words = [];
-      room.rejected.clear();
+      room.votes.clear();
+      room.override.clear();
       room.phase = 'playing';
       room.endsAt = Date.now() + room.duration * 1000;
       room.timer = setTimeout(() => endRound(room), room.duration * 1000);
@@ -214,9 +303,13 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true });
     }
     if (p === '/api/end') { endRound(room); return json(res, 200, { ok: true }); }
-    if (p === '/api/reject') {
+    if (p === '/api/override') {
+      // วนค่า: ตามโหวต → บังคับไม่ผ่าน → บังคับผ่าน → ตามโหวต
       const w = normalize(b.word);
-      if (room.rejected.has(w)) room.rejected.delete(w); else room.rejected.add(w);
+      const cur = room.override.get(w);
+      if (!cur) room.override.set(w, 'no');
+      else if (cur === 'no') room.override.set(w, 'ok');
+      else room.override.delete(w);
       broadcast(room);
       return json(res, 200, { ok: true });
     }
@@ -256,4 +349,6 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`\n  เกมพร้อมแล้ว!  เปิดหน้าจอ host:  http://localhost:${PORT}`);
   for (const ip of lanIPs()) console.log(`  ผู้เล่นในวง Wi-Fi เดียวกันเข้าได้ที่:  http://${ip}:${PORT}/play`);
   console.log('');
+  loadDict('th');
+  loadDict('en');
 });
