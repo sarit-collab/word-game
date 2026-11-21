@@ -47,15 +47,17 @@
     </div>
     <div class="card" style="margin-top:12px">
       <h2>คำของคุณ (<span id="myCount">0</span>)</h2>
-      <p class="muted" style="font-size:13px;margin-top:-6px">แตะคำเพื่อลบ · คนอื่นมองไม่เห็นคำของคุณจนจบเกม</p>
+      <p class="muted" style="font-size:13px;margin-top:-6px">แตะคำเพื่อลบ · ⚠ = ไม่พบในพจนานุกรม (ต้องให้เพื่อนโหวตผ่าน)</p>
       <div class="words" id="myWords"></div>
     </div>
   </section>
 
-  <section id="review" class="card center hide">
-    <h2>⏰ หมดเวลา!</h2>
-    <p class="muted">ผู้สร้างห้องกำลังตรวจคำ รอประกาศผลสักครู่…</p>
-    <div class="words" id="rWords" style="justify-content:center"></div>
+  <section id="vote" class="card hide">
+    <h2>⏰ หมดเวลา! โหวตคำของเพื่อน</h2>
+    <p class="muted" style="margin-top:-4px">คำนี้ <b>มีจริง</b> และ <b>อยู่ในหมวด “<span id="vCat"></span>”</b> ไหม?
+      คำที่ไม่พบในพจนานุกรมจะถูกนับว่า “ไม่ผ่าน” ไว้ก่อน ถ้าเป็นคำจริง (เช่น ชื่อเฉพาะ) กด 👍 ให้เพื่อนได้</p>
+    <div class="ballot" id="ballot"></div>
+    <p class="muted center" style="margin-bottom:0">รอผู้สร้างห้องประกาศผล…</p>
   </section>
 
   <section id="done" class="card hide">
@@ -76,7 +78,7 @@ const clock = makeClock();
 $('#roomIn').value = room;
 $('#nameIn').value = localStorage.getItem('name') || '';
 
-function show(id) { ['join', 'lobby', 'playing', 'review', 'done'].forEach(s => $('#' + s).classList.toggle('hide', s !== id)); }
+function show(id) { ['join', 'lobby', 'playing', 'vote', 'done'].forEach(s => $('#' + s).classList.toggle('hide', s !== id)); }
 
 $('#joinBtn').onclick = async () => {
   $('#joinErr').textContent = '';
@@ -98,13 +100,18 @@ $('#wordForm').onsubmit = async e => {
   if (!w) return;
   $('#wordErr').textContent = '';
   try {
-    await api('word', { room, pid, word: w });
+    const r = await api('word', { room, pid, word: w });
+    if (r.dict === false) $('#wordErr').textContent = `⚠ “${w}” ไม่พบในพจนานุกรม ต้องให้เพื่อนโหวตผ่านถึงจะได้คะแนน`;
     $('#wordIn').value = '';
     $('#wordIn').classList.remove('flash'); void $('#wordIn').offsetWidth; $('#wordIn').classList.add('flash');
   } catch (err) { $('#wordErr').textContent = err.message; }
   $('#wordIn').focus();
 };
 $('#myWords').onclick = e => { const b = e.target.closest('[data-w]'); if (b) api('unword', { room, pid, word: b.dataset.w }).catch(() => {}); };
+$('#ballot').onclick = e => {
+  const b = e.target.closest('[data-vote]');
+  if (b) api('vote', { room, pid, word: b.dataset.vote, ok: b.dataset.ok === '1' }).catch(err => alert(err.message));
+};
 
 function connect() {
   if (es) es.close();
@@ -127,11 +134,13 @@ function render(s) {
   if (s.phase === 'playing') {
     $('#gCat').textContent = s.category; $('#gLetter').textContent = s.letter;
     $('#myCount').textContent = s.me.words.length;
-    $('#myWords').innerHTML = s.me.words.slice().reverse().map(w => `<button class="w" data-w="${esc(w)}">${esc(w)}</button>`).join('');
+    $('#myWords').innerHTML = s.me.words.slice().reverse().map(w =>
+      `<button class="w" data-w="${esc(w.word)}" title="${w.dict === false ? 'ไม่พบในพจนานุกรม' : ''}">${esc(w.word)}${w.dict === false ? '<span class="dictw">⚠</span>' : ''}</button>`).join('');
     if (last !== 'playing') { $('#wordErr').textContent = ''; $('#wordIn').value = ''; setTimeout(() => $('#wordIn').focus(), 50); }
   }
-  if (s.phase === 'review') {
-    $('#rWords').innerHTML = s.me.words.map(w => `<span class="w">${esc(w)}</span>`).join('');
+  if (s.phase === 'vote' && s.ballot) {
+    $('#vCat').textContent = s.category;
+    $('#ballot').innerHTML = renderBallot(s.ballot, 'player');
   }
   if (s.phase === 'done' && s.results) {
     $('#doneTitle').textContent = `สรุปผล — หมวด “${s.category}” ตัว “${s.letter}”`;
