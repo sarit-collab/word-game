@@ -63,7 +63,8 @@ function inDict(w) {
 // ---------- AI ตรวจหมวด (Google Gemini, ใช้ API key ฟรีจาก Google AI Studio) ----------
 // ตั้งค่าใน Render: Environment → GEMINI_API_KEY   (ไม่มี key = ข้ามขั้นนี้ ใช้พจนานุกรม + โหวตอย่างเดียว)
 const GEMINI_KEY = process.env.GEMINI_API_KEY || '';
-const GEMINI_MODELS = (process.env.GEMINI_MODEL || 'gemini-flash-latest,gemini-2.5-flash,gemini-2.0-flash').split(',');
+// ระบุรุ่นเองได้ (คั่นด้วย ,) ถ้าไม่ระบุ ระบบจะถาม Google ว่ามีรุ่นไหนใช้ได้แล้วเลือกเอง
+const GEMINI_MODELS = (process.env.GEMINI_MODEL || '').split(',').map(s => s.trim()).filter(Boolean);
 const GEMINI_BASE = process.env.GEMINI_BASE || 'https://generativelanguage.googleapis.com'; // เปลี่ยนได้เพื่อทดสอบ
 let geminiModel = null; // รุ่นที่ใช้ได้จริง (จำไว้หลังเรียกสำเร็จครั้งแรก)
 const deadModels = new Set(); // รุ่นที่ตอบ 404 (ไม่มีแล้ว) ไม่ต้องลองซ้ำ
@@ -101,43 +102,58 @@ async function geminiCheck(category, letter, words) {
 - note: เหตุผลสั้นๆ ภาษาไทย ไม่เกิน 8 คำ
 ตอบเป็น JSON array เท่านั้น รูปแบบ [{"word":"...","real":true,"fits":true,"note":"..."}] ครบทุกคำ ตามลำดับ
 รายการ: ${JSON.stringify(words)}`;
-  // รุ่นที่เคยใช้ได้ขึ้นก่อน แต่ยังมีรุ่นอื่นสำรองไว้เผื่อรุ่นนั้นคนใช้เยอะ (503)
-  const all = [...new Set([...GEMINI_MODELS, ...(await discoverModels())])].filter(m => !deadModels.has(m));
-  const models = geminiModel ? [geminiModel, ...all.filter(m => m !== geminiModel)] : all;
-  let lastErr;
-  for (const m of models) {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 25000);
+  // ถามพร้อมกันสูงสุด 3 รุ่น (รุ่นที่เคยตอบเร็วขึ้นก่อน) แล้วใช้คำตอบแรกที่ได้
+  // เพราะรุ่นใหม่สุดบางทีคิดนานเกิน หรือคนใช้เยอะจนตอบ 503
+  const all = [...new Set([...(geminiModel ? [geminiModel] : []), ...GEMINI_MODELS, ...(await discoverModels())])]
+    .filter(m => !deadModels.has(m));
+  // 2 รุ่นแรก + รุ่น lite 1 ตัว (lite ตอบเร็วและมักว่าง)
+  const lite = all.find(m => /lite/.test(m));
+  const pick = [...new Set([...all.filter(m => m !== lite).slice(0, 2), ...(lite ? [lite] : [])])];
+  if (!pick.length) throw new Error('ไม่มีรุ่น Gemini ที่ใช้ได้');
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 45000);
+  try {
+    return await Promise.any(pick.map(m => askModel(m, prompt, words, ctrl.signal)));
+  } catch (agg) {
+    const errs = agg.errors || [agg];
+    throw errs.find(e => e.fatal) || errs.find(e => !/ไม่พบรุ่น/.test(e.message)) || errs[0];
+  } finally {
+    clearTimeout(timer);
+    ctrl.abort(); // ยกเลิกรุ่นที่ยังไม่ตอบ
+  }
+}
+
+async function askModel(m, prompt, words, signal) {
+  {
     try {
       const r = await fetch(`${GEMINI_BASE}/v1beta/models/${m}:generateContent`, {
-        method: 'POST', signal: ctrl.signal,
+        method: 'POST', signal,
         headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_KEY },
         body: JSON.stringify({
           contents: [{ role: 'user', parts: [{ text: prompt }] }],
           generationConfig: { temperature: 0, responseMimeType: 'application/json' },
         }),
       });
-      if (r.status === 404) { deadModels.add(m); lastErr = new Error(`ไม่พบรุ่น ${m}`); console.log('  ' + lastErr.message); continue; } // ลองรุ่นถัดไป
+      if (r.status === 404) { deadModels.add(m); throw new Error(`ไม่พบรุ่น ${m}`); }
       if (r.status === 401 || r.status === 403) throw Object.assign(new Error(`API key ใช้ไม่ได้ (HTTP ${r.status})`), { fatal: true });
       if (!r.ok) throw new Error(`Gemini HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`);
       const data = await r.json();
       const text = data.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || '[]';
       const arr = JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, ''));
-      geminiModel = m;
       const out = new Map();
       for (const x of Array.isArray(arr) ? arr : []) {
         const w = normalize(x.word);
         if (words.includes(w)) out.set(w, { real: !!x.real, fits: !!x.fits, ok: !!x.real && !!x.fits, note: String(x.note || '').slice(0, 60) });
       }
+      if (!out.size) throw new Error(`${m} ตอบกลับมาไม่ครบ`);
+      if (geminiModel !== m) console.log(`  ใช้รุ่น ${m}`);
+      geminiModel = m;
       return out;
     } catch (e) {
-      lastErr = e;
-      if (e.fatal) break;
-      console.log(`  ${m} ใช้ไม่ได้ตอนนี้: ${String(e.message).split('\n')[0].slice(0, 120)}`);
+      if (!signal.aborted) console.log(`  ${m} ใช้ไม่ได้ตอนนี้: ${String(e.message).split('\n')[0].slice(0, 120)}`);
+      throw e;
     }
-    finally { clearTimeout(timer); }
   }
-  throw lastErr || new Error('Gemini ไม่ตอบ');
 }
 
 async function runAiCheck(room) {
