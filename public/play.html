@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>หมวดคำ ไวคำ</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+  .wrap { max-width: 560px; }
+  .bar { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .bar .l { font-size: 56px; font-weight: 800; color: var(--accent); line-height: 1; }
+  .bar .t { font-size: 36px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .bar .t.low { color: var(--bad); }
+  #wordIn { font-size: 22px; }
+  .flash { animation: f .4s; } @keyframes f { from { background: #d9f7e4; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🔤 หมวดคำ ไวคำ</h1>
+
+  <section id="join" class="card hide">
+    <h2>เข้าห้อง</h2>
+    <label>รหัสห้อง</label><input id="roomIn" inputmode="numeric" maxlength="4" placeholder="1234">
+    <label>ชื่อของคุณ</label><input id="nameIn" maxlength="20" placeholder="ชื่อเล่น">
+    <div style="margin-top:16px"><button id="joinBtn" style="width:100%">เข้าร่วม</button></div>
+    <div class="err" id="joinErr"></div>
+  </section>
+
+  <section id="lobby" class="card center hide">
+    <h2>สวัสดี <span id="hello"></span> 👋</h2>
+    <p class="muted">รอผู้สร้างห้องกดเริ่มเกม…</p>
+    <div class="cat" id="lCat"></div>
+    <div class="big-letter" id="lLetter"></div>
+    <p class="muted">ผู้เล่นในห้อง: <span id="lCount"></span> คน</p>
+  </section>
+
+  <section id="playing" class="hide">
+    <div class="card">
+      <div class="bar"><div><div class="muted">หมวด</div><b id="gCat" style="font-size:20px"></b></div>
+        <div class="l" id="gLetter"></div><div class="t" id="gTimer"></div></div>
+      <form id="wordForm" class="row" style="margin-top:14px">
+        <input id="wordIn" autocomplete="off" autocapitalize="off" placeholder="พิมพ์คำแล้วกด Enter" style="flex:1">
+        <button>ส่ง</button>
+      </form>
+      <div class="err" id="wordErr"></div>
+    </div>
+    <div class="card" style="margin-top:12px">
+      <h2>คำของคุณ (<span id="myCount">0</span>)</h2>
+      <p class="muted" style="font-size:13px;margin-top:-6px">แตะคำเพื่อลบ · คนอื่นมองไม่เห็นคำของคุณจนจบเกม</p>
+      <div class="words" id="myWords"></div>
+    </div>
+  </section>
+
+  <section id="review" class="card center hide">
+    <h2>⏰ หมดเวลา!</h2>
+    <p class="muted">ผู้สร้างห้องกำลังตรวจคำ รอประกาศผลสักครู่…</p>
+    <div class="words" id="rWords" style="justify-content:center"></div>
+  </section>
+
+  <section id="done" class="card hide">
+    <h2 id="doneTitle"></h2>
+    <div id="myResult" class="center" style="font-size:20px;margin-bottom:8px"></div>
+    <div id="results"></div>
+    <p class="muted center">รอผู้สร้างห้องเริ่มรอบใหม่…</p>
+  </section>
+</div>
+
+<script src="/common.js"></script>
+<script>
+const qs = new URLSearchParams(location.search);
+let room = qs.get('room') || '';
+let pid = room ? localStorage.getItem('pid_' + room) : null;
+let state = null, es = null;
+const clock = makeClock();
+$('#roomIn').value = room;
+$('#nameIn').value = localStorage.getItem('name') || '';
+
+function show(id) { ['join', 'lobby', 'playing', 'review', 'done'].forEach(s => $('#' + s).classList.toggle('hide', s !== id)); }
+
+$('#joinBtn').onclick = async () => {
+  $('#joinErr').textContent = '';
+  room = $('#roomIn').value.trim();
+  const name = $('#nameIn').value.trim();
+  try {
+    const r = await api('join', { room, name });
+    pid = r.pid;
+    localStorage.setItem('pid_' + room, pid); localStorage.setItem('name', name);
+    history.replaceState(null, '', '/play?room=' + room);
+    connect();
+  } catch (e) { $('#joinErr').textContent = e.message; }
+};
+$('#nameIn').onkeydown = e => { if (e.key === 'Enter') $('#joinBtn').click(); };
+
+$('#wordForm').onsubmit = async e => {
+  e.preventDefault();
+  const w = $('#wordIn').value.trim();
+  if (!w) return;
+  $('#wordErr').textContent = '';
+  try {
+    await api('word', { room, pid, word: w });
+    $('#wordIn').value = '';
+    $('#wordIn').classList.remove('flash'); void $('#wordIn').offsetWidth; $('#wordIn').classList.add('flash');
+  } catch (err) { $('#wordErr').textContent = err.message; }
+  $('#wordIn').focus();
+};
+$('#myWords').onclick = e => { const b = e.target.closest('[data-w]'); if (b) api('unword', { room, pid, word: b.dataset.w }).catch(() => {}); };
+
+function connect() {
+  if (es) es.close();
+  es = listen({ room, pid }, render, () => { localStorage.removeItem('pid_' + room); pid = null; show('join'); $('#joinErr').textContent = 'ไม่พบห้องนี้ หรือคุณถูกนำออกจากห้อง — เข้าใหม่ได้เลย'; });
+}
+
+let last = null;
+function render(s) {
+  if (!s.me) { // ถูกเอาออกจากห้อง
+    es.close(); localStorage.removeItem('pid_' + room); pid = null; show('join');
+    $('#joinErr').textContent = 'คุณถูกนำออกจากห้อง'; return;
+  }
+  state = s; clock.sync(s);
+  const name = s.players.find(p => p.id === s.me.id)?.name || '';
+  show(s.phase);
+  if (s.phase === 'lobby') {
+    $('#hello').textContent = name; $('#lCat').textContent = 'หมวด: ' + s.category;
+    $('#lLetter').textContent = s.letter; $('#lCount').textContent = s.players.length;
+  }
+  if (s.phase === 'playing') {
+    $('#gCat').textContent = s.category; $('#gLetter').textContent = s.letter;
+    $('#myCount').textContent = s.me.words.length;
+    $('#myWords').innerHTML = s.me.words.slice().reverse().map(w => `<button class="w" data-w="${esc(w)}">${esc(w)}</button>`).join('');
+    if (last !== 'playing') { $('#wordErr').textContent = ''; $('#wordIn').value = ''; setTimeout(() => $('#wordIn').focus(), 50); }
+  }
+  if (s.phase === 'review') {
+    $('#rWords').innerHTML = s.me.words.map(w => `<span class="w">${esc(w)}</span>`).join('');
+  }
+  if (s.phase === 'done' && s.results) {
+    $('#doneTitle').textContent = `สรุปผล — หมวด “${s.category}” ตัว “${s.letter}”`;
+    const me = s.results.players.find(p => p.id === s.me.id);
+    $('#myResult').innerHTML = me ? `คุณได้อันดับ <b>${me.rank}</b> จาก ${s.results.players.length} คน · <b style="color:var(--accent)">${me.score}</b> คะแนน` : '';
+    $('#results').innerHTML = renderResults(s.results, s.me.id);
+  }
+  last = s.phase;
+}
+
+setInterval(() => {
+  if (state && state.phase === 'playing') {
+    const l = clock.left();
+    $('#gTimer').textContent = fmt(l);
+    $('#gTimer').classList.toggle('low', l <= 10);
+  }
+}, 250);
+
+if (room && pid) connect(); else show('join');
+</script>
+</body>
+</html>
