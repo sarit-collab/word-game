@@ -20,7 +20,8 @@
     <label>ตัวอักษรขึ้นต้น</label>
     <div class="row"><input id="letter" placeholder="เช่น ก" maxlength="3" style="flex:1">
       <button class="secondary" id="rndTh">🎲 ไทย</button><button class="secondary" id="rndEn">🎲 A–Z</button></div>
-    <p class="muted" style="font-size:13px;margin:6px 0 0">คำที่มีสระหน้า (เ แ โ ใ ไ) นับตามพยัญชนะ เช่น ตัว “ก” ใช้ “เกาะ” ได้</p>
+    <p class="muted" style="font-size:13px;margin:6px 0 0">คำที่มีสระหน้า (เ แ โ ใ ไ) นับตามพยัญชนะ เช่น ตัว “ก” ใช้ “เกาะ” ได้
+      · หมดเวลาแล้วระบบเช็กพจนานุกรม และให้ผู้เล่นโหวตว่าคำมีจริงและตรงหมวดไหม</p>
     <label>เวลา</label>
     <select id="dur"><option value="30">30 วินาที</option><option value="60" selected>1 นาที</option><option value="90">1 นาทีครึ่ง</option><option value="120">2 นาที</option><option value="180">3 นาที</option></select>
     <div style="margin-top:18px"><button id="create">สร้างห้อง</button></div>
@@ -70,12 +71,16 @@
     </div>
   </section>
 
-  <!-- ตรวจคำ -->
-  <section id="review" class="hide card">
-    <h2>ตรวจคำก่อนประกาศผล</h2>
-    <p class="muted">แตะคำที่ <b>ไม่ตรงหมวด</b> เพื่อตัดทิ้ง (แตะซ้ำเพื่อคืน) — ตัวเลขคือจำนวนคนที่ตอบคำนั้น</p>
-    <div class="words" id="allWords"></div>
-    <div class="row" style="margin-top:18px"><button class="green" id="publish">🏆 ประกาศผล</button></div>
+  <!-- โหวตคำ -->
+  <section id="vote" class="hide card">
+    <div class="row" style="justify-content:space-between">
+      <h2 style="margin:0">🗳 โหวตคำ</h2>
+      <button class="green" id="publish">🏆 ประกาศผล</button>
+    </div>
+    <p class="muted">ผู้เล่นกำลังโหวตบนมือถือว่าแต่ละคำ <b>มีจริงและตรงหมวด “<span id="vCat"></span>”</b> ไหม
+      · คำที่ไม่พบในพจนานุกรมจะไม่ผ่าน เว้นแต่เพื่อนโหวตให้ผ่านเกินครึ่ง
+      · กดปุ่มด้านขวาของคำเพื่อตัดสินเองได้</p>
+    <div class="ballot" id="hostBallot"></div>
   </section>
 
   <!-- สรุปผล -->
@@ -133,12 +138,12 @@ $('#start').onclick = async () => {
 $('#endNow').onclick = () => api('end', { room, hostKey });
 $('#publish').onclick = () => api('publish', { room, hostKey });
 $('#again').onclick = () => api('lobby', { room, hostKey });
-$('#allWords').onclick = e => { const b = e.target.closest('[data-w]'); if (b) api('reject', { room, hostKey, word: b.dataset.w }); };
+$('#hostBallot').onclick = e => { const b = e.target.closest('[data-ov]'); if (b) api('override', { room, hostKey, word: b.dataset.ov }); };
 $('#lobbyPlayers').onclick = e => { const b = e.target.closest('[data-kick]'); if (b && confirm('เอาผู้เล่นนี้ออก?')) api('kick', { room, hostKey, pid: b.dataset.kick }); };
 $('#newRoom').onclick = e => { e.preventDefault(); sessionStorage.clear(); if (es) es.close(); room = null; show('setup'); };
 $('#ipSel').onchange = () => drawQR();
 
-function show(id) { ['setup', 'lobby', 'playing', 'review', 'done'].forEach(s => $('#' + s).classList.toggle('hide', s !== id)); }
+function show(id) { ['setup', 'lobby', 'playing', 'vote', 'done'].forEach(s => $('#' + s).classList.toggle('hide', s !== id)); }
 
 function joinBase() {
   const h = location.hostname;
@@ -193,11 +198,9 @@ function render(s) {
     $('#livePlayers').innerHTML = [...s.players].sort((a, b) => b.count - a.count)
       .map(p => `<li><span><span class="dot ${p.online ? '' : 'off'}"></span>${esc(p.name)}</span><b>${p.count} คำ</b></li>`).join('');
   }
-  if (s.phase === 'review' && s.results) {
-    const rej = new Set(s.results.rejected);
-    const all = s.results.allWords.map(w => `<button class="w ${w.n > 1 ? 's' : 'u'}" data-w="${esc(w.word)}">${esc(w.word)} <span class="pts">×${w.n}</span></button>`);
-    const out = s.results.rejected.map(w => `<button class="w x" data-w="${esc(w)}">${esc(w)}</button>`);
-    $('#allWords').innerHTML = all.concat(out).join('') || '<span class="muted">ไม่มีใครส่งคำเลย</span>';
+  if (s.phase === 'vote' && s.ballot) {
+    $('#vCat').textContent = s.category;
+    $('#hostBallot').innerHTML = renderBallot(s.ballot, 'host');
   }
   if (s.phase === 'done' && s.results) {
     $('#doneTitle').textContent = `สรุปผล — หมวด “${s.category}” ตัว “${s.letter}”`;
