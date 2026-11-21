@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>หมวดคำ ไวคำ — Host</title>
+<link rel="stylesheet" href="/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+</head>
+<body>
+<div class="wrap">
+  <h1>🔤 หมวดคำ ไวคำ</h1>
+
+  <!-- ตั้งค่าห้อง -->
+  <section id="setup" class="card hide">
+    <h2>สร้างห้องใหม่</h2>
+    <label>หมวด</label>
+    <div class="row"><input id="cat" placeholder="เช่น ผลไม้" style="flex:1"><button class="secondary" id="rndCat">🎲 สุ่ม</button></div>
+    <div class="chips" id="catChips" style="margin-top:8px"></div>
+    <label>ตัวอักษรขึ้นต้น</label>
+    <div class="row"><input id="letter" placeholder="เช่น ก" maxlength="3" style="flex:1">
+      <button class="secondary" id="rndTh">🎲 ไทย</button><button class="secondary" id="rndEn">🎲 A–Z</button></div>
+    <p class="muted" style="font-size:13px;margin:6px 0 0">คำที่มีสระหน้า (เ แ โ ใ ไ) นับตามพยัญชนะ เช่น ตัว “ก” ใช้ “เกาะ” ได้</p>
+    <label>เวลา</label>
+    <select id="dur"><option value="30">30 วินาที</option><option value="60" selected>1 นาที</option><option value="90">1 นาทีครึ่ง</option><option value="120">2 นาที</option><option value="180">3 นาที</option></select>
+    <div style="margin-top:18px"><button id="create">สร้างห้อง</button></div>
+    <div class="err" id="setupErr"></div>
+  </section>
+
+  <!-- ล็อบบี้ -->
+  <section id="lobby" class="hide">
+    <div class="grid2">
+      <div class="card center">
+        <h2>สแกนเพื่อเข้าห้อง</h2>
+        <div class="qr" id="qr"></div>
+        <div class="code" id="codeTxt"></div>
+        <div class="muted" id="joinUrl" style="word-break:break-all"></div>
+        <div id="ipPick" class="hide" style="margin-top:10px"><select id="ipSel"></select></div>
+      </div>
+      <div class="card">
+        <h2>ผู้เล่น (<span id="pCount">0</span>)</h2>
+        <ul class="players" id="lobbyPlayers"></ul>
+        <hr style="border:0;border-top:1px solid var(--line);margin:18px 0">
+        <h2>รอบนี้</h2>
+        <label>หมวด</label>
+        <div class="row"><input id="cat2" style="flex:1"><button class="secondary" id="rndCat2">🎲</button></div>
+        <label>ตัวอักษร</label>
+        <div class="row"><input id="letter2" maxlength="3" style="flex:1"><button class="secondary" id="rndTh2">🎲 ไทย</button><button class="secondary" id="rndEn2">🎲 A–Z</button></div>
+        <label>เวลา</label>
+        <select id="dur2"><option value="30">30 วินาที</option><option value="60">1 นาที</option><option value="90">1 นาทีครึ่ง</option><option value="120">2 นาที</option><option value="180">3 นาที</option></select>
+        <div class="row" style="margin-top:18px"><button id="start" style="flex:1">▶ เริ่มเกม</button></div>
+        <div class="err" id="lobbyErr"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- กำลังเล่น -->
+  <section id="playing" class="hide">
+    <div class="grid2">
+      <div class="card">
+        <div class="cat" id="pCat"></div>
+        <div class="big-letter" id="pLetter"></div>
+        <div class="timer" id="pTimer"></div>
+        <div class="center"><button class="secondary" id="endNow">⏹ จบรอบเลย</button></div>
+      </div>
+      <div class="card">
+        <h2>จำนวนคำที่ส่งแล้ว</h2>
+        <ul class="players" id="livePlayers"></ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ตรวจคำ -->
+  <section id="review" class="hide card">
+    <h2>ตรวจคำก่อนประกาศผล</h2>
+    <p class="muted">แตะคำที่ <b>ไม่ตรงหมวด</b> เพื่อตัดทิ้ง (แตะซ้ำเพื่อคืน) — ตัวเลขคือจำนวนคนที่ตอบคำนั้น</p>
+    <div class="words" id="allWords"></div>
+    <div class="row" style="margin-top:18px"><button class="green" id="publish">🏆 ประกาศผล</button></div>
+  </section>
+
+  <!-- สรุปผล -->
+  <section id="done" class="hide">
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <h2 id="doneTitle" style="margin:0"></h2>
+        <button id="again">🔁 เล่นรอบใหม่ (คนเดิม)</button>
+      </div>
+      <div id="results"></div>
+    </div>
+  </section>
+
+  <p class="center muted" style="margin-top:24px"><a href="#" id="newRoom" class="muted">สร้างห้องใหม่</a></p>
+</div>
+
+<script src="/common.js"></script>
+<script>
+const CATS = ['ผลไม้', 'สัตว์', 'อาหาร', 'อาชีพ', 'สิ่งของในบ้าน', 'ประเทศ', 'จังหวัด', 'สี', 'ผัก', 'ขนม', 'เครื่องดื่ม', 'กีฬา', 'ยานพาหนะ', 'อวัยวะ', 'ชื่อดารา', 'แบรนด์', 'เครื่องเขียน', 'ดอกไม้'];
+const TH = 'กขคงจฉชซดตถทธนบปผพฟภมยรลวศสหอฮ'.split('');
+const EN = 'ABCDEFGHIJKLMNOPRSTW'.split('');
+const pick = a => a[Math.floor(Math.random() * a.length)];
+
+let room = sessionStorage.getItem('room'), hostKey = sessionStorage.getItem('hostKey');
+let state = null, info = null, es = null, qrUrl = '';
+const clock = makeClock();
+
+$('#catChips').innerHTML = CATS.map(c => `<button class="chip" data-c="${c}">${c}</button>`).join('');
+$('#catChips').onclick = e => { if (e.target.dataset.c) $('#cat').value = e.target.dataset.c; };
+$('#rndCat').onclick = () => $('#cat').value = pick(CATS);
+$('#rndTh').onclick = () => $('#letter').value = pick(TH);
+$('#rndEn').onclick = () => $('#letter').value = pick(EN);
+
+const saveSettings = () => api('settings', { room, hostKey, category: $('#cat2').value, letter: $('#letter2').value, duration: $('#dur2').value }).catch(() => {});
+$('#rndCat2').onclick = () => { $('#cat2').value = pick(CATS); saveSettings(); };
+$('#rndTh2').onclick = () => { $('#letter2').value = pick(TH); saveSettings(); };
+$('#rndEn2').onclick = () => { $('#letter2').value = pick(EN); saveSettings(); };
+['#cat2', '#letter2', '#dur2'].forEach(s => $(s).onchange = saveSettings);
+
+$('#create').onclick = async () => {
+  $('#setupErr').textContent = '';
+  try {
+    const cat = $('#cat').value.trim() || pick(CATS);
+    const letter = $('#letter').value.trim() || pick(TH);
+    const r = await api('create', { category: cat, letter, duration: $('#dur').value });
+    room = r.room; hostKey = r.hostKey;
+    sessionStorage.setItem('room', room); sessionStorage.setItem('hostKey', hostKey);
+    connect();
+  } catch (e) { $('#setupErr').textContent = e.message; }
+};
+$('#start').onclick = async () => {
+  $('#lobbyErr').textContent = '';
+  try { await saveSettings(); await api('start', { room, hostKey }); } catch (e) { $('#lobbyErr').textContent = e.message; }
+};
+$('#endNow').onclick = () => api('end', { room, hostKey });
+$('#publish').onclick = () => api('publish', { room, hostKey });
+$('#again').onclick = () => api('lobby', { room, hostKey });
+$('#allWords').onclick = e => { const b = e.target.closest('[data-w]'); if (b) api('reject', { room, hostKey, word: b.dataset.w }); };
+$('#lobbyPlayers').onclick = e => { const b = e.target.closest('[data-kick]'); if (b && confirm('เอาผู้เล่นนี้ออก?')) api('kick', { room, hostKey, pid: b.dataset.kick }); };
+$('#newRoom').onclick = e => { e.preventDefault(); sessionStorage.clear(); if (es) es.close(); room = null; show('setup'); };
+$('#ipSel').onchange = () => drawQR();
+
+function show(id) { ['setup', 'lobby', 'playing', 'review', 'done'].forEach(s => $('#' + s).classList.toggle('hide', s !== id)); }
+
+function joinBase() {
+  const h = location.hostname;
+  if ((h === 'localhost' || h === '127.0.0.1') && info && info.ips.length) {
+    const ip = $('#ipSel').value || info.ips[0];
+    return `http://${ip}:${location.port || 80}`;
+  }
+  return location.origin;
+}
+function drawQR() {
+  const url = `${joinBase()}/play?room=${room}`;
+  if (url === qrUrl) return;
+  qrUrl = url;
+  $('#joinUrl').textContent = url;
+  $('#codeTxt').textContent = room;
+  if (window.qrcode) {
+    const q = qrcode(0, 'M'); q.addData(url); q.make();
+    $('#qr').innerHTML = q.createSvgTag({ cellSize: 6, margin: 2, scalable: true });
+  } else {
+    $('#qr').innerHTML = '<p class="muted" style="width:240px">โหลด QR ไม่ได้ (ไม่มีอินเทอร์เน็ต)<br>ให้ผู้เล่นพิมพ์ลิงก์ด้านล่างแทน</p>';
+  }
+}
+
+async function connect() {
+  if (!info) {
+    info = await fetch('/api/info').then(r => r.json()).catch(() => ({ ips: [] }));
+    if (info.ips.length > 1) {
+      $('#ipSel').innerHTML = info.ips.map(ip => `<option>${ip}</option>`).join('');
+      $('#ipPick').classList.remove('hide');
+    }
+  }
+  if (es) es.close();
+  es = listen({ room, host: hostKey }, render, () => { sessionStorage.clear(); room = null; show('setup'); });
+}
+
+let lastPhase = null;
+function render(s) {
+  state = s; clock.sync(s);
+  show(s.phase);
+  if (s.phase === 'lobby') {
+    drawQR();
+    $('#pCount').textContent = s.players.length;
+    $('#lobbyPlayers').innerHTML = s.players.map(p => `<li><span><span class="dot ${p.online ? '' : 'off'}"></span>${esc(p.name)}</span>
+      <button class="secondary" style="padding:4px 10px" data-kick="${p.id}">✕</button></li>`).join('') || '<li class="muted">รอผู้เล่นสแกน QR…</li>';
+    if (lastPhase !== 'lobby' || document.activeElement.tagName !== 'INPUT') {
+      $('#cat2').value = s.category; $('#letter2').value = s.letter; $('#dur2').value = s.duration;
+    }
+  }
+  if (s.phase === 'playing') {
+    $('#pCat').textContent = 'หมวด: ' + s.category;
+    $('#pLetter').textContent = s.letter;
+    $('#livePlayers').innerHTML = [...s.players].sort((a, b) => b.count - a.count)
+      .map(p => `<li><span><span class="dot ${p.online ? '' : 'off'}"></span>${esc(p.name)}</span><b>${p.count} คำ</b></li>`).join('');
+  }
+  if (s.phase === 'review' && s.results) {
+    const rej = new Set(s.results.rejected);
+    const all = s.results.allWords.map(w => `<button class="w ${w.n > 1 ? 's' : 'u'}" data-w="${esc(w.word)}">${esc(w.word)} <span class="pts">×${w.n}</span></button>`);
+    const out = s.results.rejected.map(w => `<button class="w x" data-w="${esc(w)}">${esc(w)}</button>`);
+    $('#allWords').innerHTML = all.concat(out).join('') || '<span class="muted">ไม่มีใครส่งคำเลย</span>';
+  }
+  if (s.phase === 'done' && s.results) {
+    $('#doneTitle').textContent = `สรุปผล — หมวด “${s.category}” ตัว “${s.letter}”`;
+    $('#results').innerHTML = renderResults(s.results);
+  }
+  lastPhase = s.phase;
+}
+
+setInterval(() => {
+  if (state && state.phase === 'playing') {
+    const l = clock.left();
+    $('#pTimer').textContent = fmt(l);
+    $('#pTimer').classList.toggle('low', l <= 10);
+  }
+}, 250);
+
+if (room && hostKey) connect(); else show('setup');
+</script>
+</body>
+</html>
