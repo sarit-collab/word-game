@@ -66,6 +66,7 @@ const GEMINI_KEY = process.env.GEMINI_API_KEY || '';
 const GEMINI_MODELS = (process.env.GEMINI_MODEL || 'gemini-flash-latest,gemini-2.5-flash,gemini-2.0-flash').split(',');
 const GEMINI_BASE = process.env.GEMINI_BASE || 'https://generativelanguage.googleapis.com'; // เปลี่ยนได้เพื่อทดสอบ
 let geminiModel = null; // รุ่นที่ใช้ได้จริง (จำไว้หลังเรียกสำเร็จครั้งแรก)
+const deadModels = new Set(); // รุ่นที่ตอบ 404 (ไม่มีแล้ว) ไม่ต้องลองซ้ำ
 
 // ถามรายชื่อรุ่นที่ key นี้ใช้ได้ แล้วเลือกรุ่น Flash ใหม่สุด (กันชื่อรุ่นเปลี่ยนในอนาคต)
 let discovered = null;
@@ -83,7 +84,8 @@ async function discoverModels() {
     // รุ่นเสถียรก่อน → เวอร์ชันใหม่สุด → ไม่ใช่ lite → ชื่อสั้น (ตัวหลัก)
     list.sort((a, b) => unstable(a) - unstable(b) || ver(b) - ver(a) || (/lite/.test(a) - /lite/.test(b)) || a.length - b.length);
     console.log('  รุ่น Gemini ที่ใช้ได้:', list.slice(0, 6).join(', ') || '(ไม่มี)');
-    discovered = list.slice(0, 4);
+    // รุ่นหลัก 3 ตัว + รุ่น lite 1 ตัวเป็นตัวสำรอง (รุ่น lite มักว่างกว่าตอนคนใช้เยอะ)
+    discovered = [...list.filter(n => !/lite/.test(n)).slice(0, 3), ...list.filter(n => /lite/.test(n)).slice(0, 1)];
   } catch (e) {
     console.log('  ดึงรายชื่อรุ่น Gemini ไม่ได้:', e.message);
     discovered = [];
@@ -99,7 +101,9 @@ async function geminiCheck(category, letter, words) {
 - note: เหตุผลสั้นๆ ภาษาไทย ไม่เกิน 8 คำ
 ตอบเป็น JSON array เท่านั้น รูปแบบ [{"word":"...","real":true,"fits":true,"note":"..."}] ครบทุกคำ ตามลำดับ
 รายการ: ${JSON.stringify(words)}`;
-  const models = geminiModel ? [geminiModel] : [...GEMINI_MODELS, ...(await discoverModels())];
+  // รุ่นที่เคยใช้ได้ขึ้นก่อน แต่ยังมีรุ่นอื่นสำรองไว้เผื่อรุ่นนั้นคนใช้เยอะ (503)
+  const all = [...new Set([...GEMINI_MODELS, ...(await discoverModels())])].filter(m => !deadModels.has(m));
+  const models = geminiModel ? [geminiModel, ...all.filter(m => m !== geminiModel)] : all;
   let lastErr;
   for (const m of models) {
     const ctrl = new AbortController();
@@ -113,7 +117,8 @@ async function geminiCheck(category, letter, words) {
           generationConfig: { temperature: 0, responseMimeType: 'application/json' },
         }),
       });
-      if (r.status === 404) { lastErr = new Error(`ไม่พบรุ่น ${m}`); console.log('  ' + lastErr.message); continue; } // ลองรุ่นถัดไป
+      if (r.status === 404) { deadModels.add(m); lastErr = new Error(`ไม่พบรุ่น ${m}`); console.log('  ' + lastErr.message); continue; } // ลองรุ่นถัดไป
+      if (r.status === 401 || r.status === 403) throw Object.assign(new Error(`API key ใช้ไม่ได้ (HTTP ${r.status})`), { fatal: true });
       if (!r.ok) throw new Error(`Gemini HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`);
       const data = await r.json();
       const text = data.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || '[]';
@@ -125,7 +130,11 @@ async function geminiCheck(category, letter, words) {
         if (words.includes(w)) out.set(w, { real: !!x.real, fits: !!x.fits, ok: !!x.real && !!x.fits, note: String(x.note || '').slice(0, 60) });
       }
       return out;
-    } catch (e) { lastErr = e; if (geminiModel) break; }
+    } catch (e) {
+      lastErr = e;
+      if (e.fatal) break;
+      console.log(`  ${m} ใช้ไม่ได้ตอนนี้: ${String(e.message).split('\n')[0].slice(0, 120)}`);
+    }
     finally { clearTimeout(timer); }
   }
   throw lastErr || new Error('Gemini ไม่ตอบ');
@@ -138,15 +147,21 @@ async function runAiCheck(room) {
   const round = room.round;
   room.aiStatus = 'checking';
   broadcast(room);
-  try {
-    const result = await geminiCheck(room.category, room.letter, words);
-    if (room.round !== round) return; // เริ่มรอบใหม่ไปแล้ว
-    room.ai = result;
-    room.aiStatus = result.size ? 'done' : 'error';
-  } catch (e) {
-    console.log('  AI ตรวจไม่สำเร็จ:', e.message);
-    if (room.round !== round) return;
-    room.aiStatus = 'error';
+  // ลองสูงสุด 3 รอบ เว้นระยะ 3 และ 8 วินาที (ช่วงที่ Gemini ฟรีคนใช้เยอะ มักตอบ 503 ชั่วคราว)
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const result = await geminiCheck(room.category, room.letter, words);
+      if (room.round !== round) return; // เริ่มรอบใหม่ไปแล้ว
+      room.ai = result;
+      room.aiStatus = result.size ? 'done' : 'error';
+      break;
+    } catch (e) {
+      console.log(`  AI ตรวจไม่สำเร็จ (ครั้งที่ ${attempt}):`, String(e.message).split('\n')[0].slice(0, 150));
+      if (room.round !== round) return;
+      if (e.fatal || attempt === 3) { room.aiStatus = 'error'; break; }
+      await new Promise(r => setTimeout(r, attempt === 1 ? 3000 : 8000));
+      if (room.round !== round || room.phase !== 'vote') return;
+    }
   }
   broadcast(room);
 }
