@@ -29,10 +29,11 @@ function makeClock() {
 }
 const fmt = sec => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
 
-const REASON = { dict: 'ไม่มีในพจนานุกรม และไม่มีใครโหวตให้ผ่าน', vote: 'เพื่อนโหวตไม่ผ่าน', host: 'host ตัดสินไม่ผ่าน' };
+const REASON = { dict: 'ไม่มีในพจนานุกรม และไม่มีใครโหวตให้ผ่าน', vote: 'เพื่อนโหวตไม่ผ่าน', host: 'host ตัดสินไม่ผ่าน', ai: 'AI ตัดสินว่าไม่ผ่าน' };
 function wordChip(w) {
   const cls = w.rejected ? 'x' : w.pts === 2 ? 'u' : 's';
-  const tip = w.rejected ? REASON[w.reason] || 'ไม่ผ่าน' : w.pts === 2 ? 'ไม่ซ้ำใคร' : `ซ้ำกับอีก ${w.sharedWith - 1} คน`;
+  const why = (REASON[w.reason] || 'ไม่ผ่าน') + (w.reason === 'ai' && w.note ? `: ${w.note}` : '');
+  const tip = esc(w.rejected ? why : w.pts === 2 ? 'ไม่ซ้ำใคร' : `ซ้ำกับอีก ${w.sharedWith - 1} คน`);
   return `<span class="w ${cls}" title="${tip}">${esc(w.word)}<span class="pts">+${w.pts}</span></span>`;
 }
 
@@ -42,11 +43,29 @@ function dictTag(d) {
   return '<span class="tag">ยังตรวจพจนานุกรมไม่ได้</span>';
 }
 
+function aiTag(a) {
+  if (!a) return '';
+  const label = a.ok ? '🤖 AI: ผ่าน' : !a.real ? '🤖 AI: ไม่ใช่คำจริง' : '🤖 AI: ไม่ตรงหมวด';
+  const style = a.ok ? 'background:#e3f6ea;color:#13703f' : 'background:#fde8e8;color:#a32020';
+  return `<span class="tag" style="${style}">${label}${a.note ? ' · ' + esc(a.note) : ''}</span>`;
+}
+
+// แถบสถานะ AI เหนือบัตรโหวต (อ่าน state ของหน้า host/play)
+function aiBanner() {
+  const st = typeof state !== 'undefined' && state ? state.aiStatus : 'off';
+  const msg = {
+    checking: '🤖 AI กำลังตรวจว่าคำมีจริงและตรงหมวด… รอสักครู่',
+    done: '🤖 AI ตรวจแล้ว ใช้เป็นค่าเริ่มต้นของโหวต ถ้าไม่เห็นด้วยกดโหวตแก้ได้',
+    error: '🤖 AI ตรวจไม่สำเร็จรอบนี้ (อาจใช้โควตาฟรีหมด) ใช้พจนานุกรม + โหวตแทน',
+  }[st];
+  return msg ? `<p class="tag" style="display:block;border-radius:10px;padding:8px 12px;font-size:13px;margin:0">${msg}</p>` : '';
+}
+
 // บัตรโหวต: mode = 'player' (ปุ่มโหวต) หรือ 'host' (ปุ่มตัดสิน)
 function renderBallot(list, mode) {
   if (!list.length) return '<p class="muted">ไม่มีใครส่งคำเลย</p>';
   const OV = { null: 'ตามโหวต', no: '✗ บังคับไม่ผ่าน', ok: '✓ บังคับผ่าน' };
-  return list.map(b => {
+  return aiBanner() + list.map(b => {
     let ctl = '';
     if (mode === 'host') {
       ctl = `<button class="secondary sm" data-ov="${esc(b.word)}">${OV[b.override]}</button>`;
@@ -59,7 +78,7 @@ function renderBallot(list, mode) {
     const tally = b.override ? 'host ตัดสิน' : b.voters ? `👍 ${b.yes} · 👎 ${b.no}` : 'ไม่มีคนโหวต';
     return `<div class="vrow ${b.pass ? 'pass' : 'fail'}">
       <div class="vmain"><b class="vword">${esc(b.word)}</b>
-        <div class="tags">${dictTag(b.dict)}${b.n > 1 ? `<span class="tag">ตอบ ${b.n} คน</span>` : ''}<span class="tag">${tally}</span>
+        <div class="tags">${aiTag(b.ai)}${dictTag(b.dict)}${b.n > 1 ? `<span class="tag">ตอบ ${b.n} คน</span>` : ''}<span class="tag">${tally}</span>
           <span class="pill ${b.pass ? 'p-ok' : 'p-no'}">${b.pass ? 'ผ่าน' : 'ไม่ผ่าน'}</span></div></div>
       ${ctl}</div>`;
   }).join('');
